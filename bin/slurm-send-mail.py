@@ -103,6 +103,8 @@ class UserThrottle:
 
     Used to limit how hard slurm is hit each cycle if a user has many jobs failing/ending per cycle
     This can be used to control the load on slurm
+
+    This won't stop emails from sending, they just won't be populated with extra details
     '''
     def __init__(self, userEmailThrottle=1000):
         '''Default to very high value to not throttle.'''
@@ -119,7 +121,10 @@ class UserThrottle:
         '''
         if not userEmail in self.users:
             # first time seeing userEmail init
+            logging.debug('%s first time seen' % userEmail)
             self.users[userEmail] = self.userEmailThrottle
+
+        logging.debug('Email: %s has %n emails left' % (userEmail, self.users[userEmail]) )
 
         if self.users[userEmail] > 0:
             # user has email left they are NOT at_limit()
@@ -128,6 +133,7 @@ class UserThrottle:
 
         else:
             # they are out of emails they ARE at_limit()
+            logging.info('%s hit email throttle' % userEmail)
             return True
 
 
@@ -176,6 +182,7 @@ if __name__ == "__main__":
 		sacctExe = config.get(section, 'sacctExe')
 		scontrolExe = config.get(section, 'scontrolExe')
 		datetimeFormat = config.get(section, 'datetimeFormat')
+		userEmailThrottle = config.get(section, 'userEmailThrottle')
 	except Exception as e:
 		die('Error: %s' % e)
 
