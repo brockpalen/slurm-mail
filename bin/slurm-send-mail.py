@@ -97,6 +97,42 @@ def runCommand(cmd):
 	stdout, stderr = process.communicate()
 	return (process.returncode, stdout, stderr)
 
+class UserThrottle:
+    '''
+    Object that tracks current per userEmail messages hitting sctl 
+
+    Used to limit how hard slurm is hit each cycle if a user has many jobs failing/ending per cycle
+    This can be used to control the load on slurm
+    '''
+    def __init__(self, userEmailThrottle=1000):
+        '''Default to very high value to not throttle.'''
+        self.userEmailThrottle=userEmailThrottle
+        self.users = dict()  # dict key value users['userEmail'] = emailLeft
+
+    def at_limit(self, userEmail):
+        '''
+        Check if userEmail is at their limit return if allowed to get mail or not 
+        then decrement by one
+
+        userEmail IN string used as key for user
+        at_limit  OUT bool
+        '''
+        if not userEmail in self.users:
+            # first time seeing userEmail init
+            self.users[userEmail] = self.userEmailThrottle
+
+        if self.users[userEmail] > 0:
+            # user has email left they are NOT at_limit()
+            self.users[userEmail] -= 1
+            return False
+
+        else:
+            # they are out of emails they ARE at_limit()
+            return True
+
+
+
+
 if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser(description='Send pending Slurm e-mails to users', add_help=True)
