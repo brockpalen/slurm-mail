@@ -163,7 +163,7 @@ if __name__ == "__main__":
 	if not os.path.isdir(confDir):
 		die('%s does not exist' % confDir)
 
-	for f in [confFile, startedTpl, endedTpl, jobTableTpl, stylesheet]:
+	for f in [confFile, startedTpl, endedTpl, throttleTpl, jobTableTpl, stylesheet]:
 		checkFile(f)
 
 	section = 'slurm-send-mail'
