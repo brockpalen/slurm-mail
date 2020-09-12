@@ -224,6 +224,7 @@ if __name__ == "__main__":
 						cmd = '%s -j %d -p -n --fields=JobId,Partition,JobName,Start,End,State,nnodes,WorkDir,Elapsed,ExitCode,Comment,Cluster,User,NodeList,TimeLimit,TimelimitRaw' % (sacctExe, jobId)
 						rtnCode, stdout, stderr = runCommand(cmd)
 						if rtnCode == 0:
+							jobDic = {}
 							body = ''
 							jobName = ''
 							user = ''
