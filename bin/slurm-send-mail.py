@@ -156,6 +156,7 @@ if __name__ == "__main__":
 	confFile = os.path.join(confDir, 'slurm-mail.conf')
 	startedTpl = os.path.join(confDir, 'started.tpl')
 	endedTpl = os.path.join(confDir, 'ended.tpl')
+	throttleTpl = os.path.join(confDir, 'throttle.tpl')
 	jobTableTpl = os.path.join(confDir, 'job_table.tpl')
 	stylesheet = os.path.join(confDir, 'style.css')
 
@@ -194,6 +195,7 @@ if __name__ == "__main__":
 	checkFile(sacctExe)
 	checkFile(scontrolExe)
 	css = getFileContents(stylesheet)
+	throttle = UserThrottle(userEmailThrottle=userEmailThrottle)
 
 	if not os.access(spoolDir, os.R_OK | os.W_OK):
 		die("Cannot access %s, check file permissions and that the directory exists " % spoolDir)
@@ -208,144 +210,160 @@ if __name__ == "__main__":
 		if len(fields) == 3:
 			logging.info("processing: " + f)
 			try:
-				userEmail = None
-				jobId = int(fields[0])
-				state = fields[1]
 				# e-mail address stored in the file
+				userEmail = None
 				with open(f, 'r') as spoolFile:
 					userEmail = spoolFile.read()
+				# check if user should be throttled
+				if throttle.at_limit(userEmail):
+					state = 'Throttle'
+				else:
+					state = fields[1]
+				jobId = int(fields[0])
+                
 
-				if state in ['Began', 'Ended', 'Failed']:
-					# get job info from sacct
-					cmd = '%s -j %d -p -n --fields=JobId,Partition,JobName,Start,End,State,nnodes,WorkDir,Elapsed,ExitCode,Comment,Cluster,User,NodeList,TimeLimit,TimelimitRaw' % (sacctExe, jobId)
-					rtnCode, stdout, stderr = runCommand(cmd)
-					if rtnCode == 0:
-						body = ''
-						jobName = ''
-						user = ''
-						partition = ''
-						cluster = ''
-						nodes = 0
-						comment = ''
-						workDir = ''
-						jobState = ''
-						exitCode = 'N/A'
-						elapsed = 'N/A'
-						wallclock = ''
-						wallclockAccuracy = ''
-						start = ''
-						end = 'N/A'
-						stdoutFile = '?'
-						stderrFile = '?'
-
-						logging.debug(stdout)
-						if IS_PYTHON_3:
-							stdout = stdout.decode()
-						for line in stdout.split("\n"):
-							data = line.split('|')
-							if data[0] == "%s" % jobId:
-								parition = data[1]
-								jobName = data[2]
-								cluster = data[11]
-								workDir = data[7]
-								startTS = int(data[3])
-								start = datetime.fromtimestamp(startTS).strftime(datetimeFormat)
-								comment = data[10]
-								nodes = data[6]
-								user = data[12]
-								nodelist = data[13]
-								if data[14] == 'UNLIMITED':
-									wallclock = 'UNLIMITED'
-									wallclockSeconds = 0
-								else:
-									wallclock = data[14].replace('T', ' ')
-									wallclockSeconds = int(data[15]) * 60
-								if state != 'Began':
-									endTS = int(data[4])
-									end = datetime.fromtimestamp(endTS).strftime(datetimeFormat)
-									elapsed = data[8] # [days-]hours:minutes:seconds
-									# convert elapsed to seconds
-									# do we have days?
-									match = elapsedRe.match(elapsed)
-									if match:
-										days, hours, mins, secs = match.groups()
-									else:
-										hours, mins, secs = elapsed.split(':')
-										days = 0
-									elapsedSeconds = (int(days) * 86400) + (int(hours) * 3600) + (int(mins) * 60) + int(secs)
-									if wallclockSeconds > 0:
-										wallclockAccuracy = '%.2f%%' % ((float(elapsedSeconds) / float(wallclockSeconds)) * 100.0)
-									else:
-										wallclockAccuracy = 'N/A'
-									exitCode = data[9]
-									jobState = data[5]
-									if jobState == 'TIMEOUT':
-										jobState = 'WALLCLOCK EXCEEDED'
-										wallclockAccuracy = '0%'
-						cmd = '%s -o show job=%d' % (scontrolExe, jobId)
+				if state in ['Began', 'Ended', 'Failed', 'Throttle']:
+					if state is not 'Throttle':  # only continue of were not throttling requests to slurm
+						# get job info from sacct
+						cmd = '%s -j %d -p -n --fields=JobId,Partition,JobName,Start,End,State,nnodes,WorkDir,Elapsed,ExitCode,Comment,Cluster,User,NodeList,TimeLimit,TimelimitRaw' % (sacctExe, jobId)
 						rtnCode, stdout, stderr = runCommand(cmd)
 						if rtnCode == 0:
-							jobDic = {}
+							body = ''
+							jobName = ''
+							user = ''
+							partition = ''
+							cluster = ''
+							nodes = 0
+							comment = ''
+							workDir = ''
+							jobState = ''
+							exitCode = 'N/A'
+							elapsed = 'N/A'
+							wallclock = ''
+							wallclockAccuracy = ''
+							start = ''
+							end = 'N/A'
+							stdoutFile = '?'
+							stderrFile = '?'
+	
+							logging.debug(stdout)
 							if IS_PYTHON_3:
 								stdout = stdout.decode()
-							for i in stdout.split(' '):
-								x = i.split('=', 1)
-								if len(x) == 2:
-									jobDic[x[0]] = x[1]
-							stdoutFile = jobDic['StdOut']
-							stderrFile = jobDic['StdErr']
-						else:
-							logging.error('failed to run: %s' % cmd)
-							logging.error(stdout)
-							logging.error(stderr)
-
-						tpl = Template(getFileContents(jobTableTpl))
-						jobTable = tpl.substitute(
-							JOB_ID=jobId,
-							JOB_NAME=jobName,
-							PARTITION=parition,
-							START=start,
-							END=end,
-							ELAPSED=elapsed,
-							WORKDIR=workDir,
-							EXIT_CODE=exitCode,
-							EXIT_STATE=jobState,
-							COMMENT=comment,
-							NODES=nodes,
-							NODE_LIST=nodelist,
-							STDOUT=stdoutFile,
-							STDERR=stderrFile,
-							WALLCLOCK=wallclock,
-							WALLCLOCK_ACCURACY=wallclockAccuracy
-						)
-
-						if state == 'Began':
-							tpl = Template(getFileContents(startedTpl))
-							body = tpl.substitute(
-								CSS=css,
-								JOB_ID=jobId,
-								USER=pwd.getpwnam(user).pw_gecos,
-								JOB_TABLE=jobTable,
-								CLUSTER=cluster,
-								EMAIL_FROM=emailFromName
-							)
-						elif state == 'Ended' or state == 'Failed':
-							tpl = Template(getFileContents(endedTpl))
-							if state == 'Failed':
-								endTxt = 'failed'
+							for line in stdout.split("\n"):
+								data = line.split('|')
+								if data[0] == "%s" % jobId:
+									parition = data[1]
+									jobName = data[2]
+									cluster = data[11]
+									workDir = data[7]
+									startTS = int(data[3])
+									start = datetime.fromtimestamp(startTS).strftime(datetimeFormat)
+									comment = data[10]
+									nodes = data[6]
+									user = data[12]
+									nodelist = data[13]
+									if data[14] == 'UNLIMITED':
+										wallclock = 'UNLIMITED'
+										wallclockSeconds = 0
+									else:
+										wallclock = data[14].replace('T', ' ')
+										wallclockSeconds = int(data[15]) * 60
+									if state != 'Began':
+										endTS = int(data[4])
+										end = datetime.fromtimestamp(endTS).strftime(datetimeFormat)
+										elapsed = data[8] # [days-]hours:minutes:seconds
+										# convert elapsed to seconds
+										# do we have days?
+										match = elapsedRe.match(elapsed)
+										if match:
+											days, hours, mins, secs = match.groups()
+										else:
+											hours, mins, secs = elapsed.split(':')
+											days = 0
+										elapsedSeconds = (int(days) * 86400) + (int(hours) * 3600) + (int(mins) * 60) + int(secs)
+										if wallclockSeconds > 0:
+											wallclockAccuracy = '%.2f%%' % ((float(elapsedSeconds) / float(wallclockSeconds)) * 100.0)
+										else:
+											wallclockAccuracy = 'N/A'
+										exitCode = data[9]
+										jobState = data[5]
+										if jobState == 'TIMEOUT':
+											jobState = 'WALLCLOCK EXCEEDED'
+											wallclockAccuracy = '0%'
+							cmd = '%s -o show job=%d' % (scontrolExe, jobId)
+							rtnCode, stdout, stderr = runCommand(cmd)
+							if rtnCode == 0:
+								jobDic = {}
+								if IS_PYTHON_3:
+									stdout = stdout.decode()
+								for i in stdout.split(' '):
+									x = i.split('=', 1)
+									if len(x) == 2:
+										jobDic[x[0]] = x[1]
+								stdoutFile = jobDic['StdOut']
+								stderrFile = jobDic['StdErr']
 							else:
-								endTxt = 'ended'
-
+								logging.error('failed to run: %s' % cmd)
+								logging.error(stdout)
+								logging.error(stderr)
+	
+							tpl = Template(getFileContents(jobTableTpl))
+							jobTable = tpl.substitute(
+								JOB_ID=jobId,
+								JOB_NAME=jobName,
+								PARTITION=parition,
+								START=start,
+								END=end,
+								ELAPSED=elapsed,
+								WORKDIR=workDir,
+								EXIT_CODE=exitCode,
+								EXIT_STATE=jobState,
+								COMMENT=comment,
+								NODES=nodes,
+								NODE_LIST=nodelist,
+								STDOUT=stdoutFile,
+								STDERR=stderrFile,
+								WALLCLOCK=wallclock,
+								WALLCLOCK_ACCURACY=wallclockAccuracy
+							)
+	
+							if state == 'Began':
+								tpl = Template(getFileContents(startedTpl))
+								body = tpl.substitute(
+									CSS=css,
+									JOB_ID=jobId,
+									USER=pwd.getpwnam(user).pw_gecos,
+									JOB_TABLE=jobTable,
+									CLUSTER=cluster,
+									EMAIL_FROM=emailFromName
+								)
+							elif state == 'Ended' or state == 'Failed':
+								tpl = Template(getFileContents(endedTpl))
+								if state == 'Failed':
+									endTxt = 'failed'
+								else:
+									endTxt = 'ended'
+	
+								body = tpl.substitute(
+									CSS=css,
+									END_TXT=endTxt,
+									JOB_ID=jobId,
+									USER=pwd.getpwnam(user).pw_gecos,
+									JOB_TABLE=jobTable,
+									CLUSTER=cluster,
+									EMAIL_FROM=emailFromName
+								)
+						else:  # state == Throttle
+							cluster = 'throttled'  # set values for cluster and email to sane defaults when not populated by sacct
+							user = userEmail
+							tpl = Template(getFileContents(throttleTpl))
 							body = tpl.substitute(
 								CSS=css,
 								END_TXT=endTxt,
 								JOB_ID=jobId,
-								USER=pwd.getpwnam(user).pw_gecos,
-								JOB_TABLE=jobTable,
-								CLUSTER=cluster,
 								EMAIL_FROM=emailFromName
 							)
-
+	
 						# create HTML e-mail
 						msg = MIMEMultipart('alternative')
 						msg['subject'] = 'Job %s.%d: %s' % (cluster, jobId, state)
