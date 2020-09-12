@@ -16,6 +16,8 @@
 
 <p>Details about the job has been surppressed due to large number of job emails being generated.</p>
 
+<p>To avoid this message limit the rate of jobs starting/ending in short periods</p>
+
 <p>Regards,</p>
 
 <p>$EMAIL_FROM</p>
