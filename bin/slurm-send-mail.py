@@ -210,20 +210,16 @@ if __name__ == "__main__":
 		if len(fields) == 3:
 			logging.info("processing: " + f)
 			try:
-				# e-mail address stored in the file
 				userEmail = None
+				jobId = int(fields[0])
+				state = fields[1]
+				# e-mail address stored in the file
 				with open(f, 'r') as spoolFile:
 					userEmail = spoolFile.read()
-				# check if user should be throttled
-				if throttle.at_limit(userEmail):
-					state = 'Throttle'
-				else:
-					state = fields[1]
-				jobId = int(fields[0])
                 
 
-				if state in ['Began', 'Ended', 'Failed', 'Throttle']:
-					if state is not 'Throttle':  # only continue of were not throttling requests to slurm
+				if state in ['Began', 'Ended', 'Failed']:
+					if not throttle.at_limit(userEmail):  # only continue of were not throttling requests to slurm
 						# get job info from sacct
 						cmd = '%s -j %d -p -n --fields=JobId,Partition,JobName,Start,End,State,nnodes,WorkDir,Elapsed,ExitCode,Comment,Cluster,User,NodeList,TimeLimit,TimelimitRaw' % (sacctExe, jobId)
 						rtnCode, stdout, stderr = runCommand(cmd)
@@ -353,13 +349,12 @@ if __name__ == "__main__":
 									CLUSTER=cluster,
 									EMAIL_FROM=emailFromName
 								)
-						else:  # state == Throttle
+						else:  # Throttled
 							cluster = 'throttled'  # set values for cluster and email to sane defaults when not populated by sacct
 							user = userEmail
 							tpl = Template(getFileContents(throttleTpl))
 							body = tpl.substitute(
 								CSS=css,
-								END_TXT=endTxt,
 								JOB_ID=jobId,
 								EMAIL_FROM=emailFromName
 							)
